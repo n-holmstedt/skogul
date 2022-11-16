@@ -137,6 +137,8 @@ github.com/hamba/avro v1.8.0/go.mod h1:NiGUcrLLT+CKfGu5REWQtD9OVPPYUGMVFiC+DE0lQ
 github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hashicorp/golang-lru v0.5.1/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
+github.com/ios-xr/telemetry-go-collector v0.0.0-20190725043225-eea20f35c2a1 h1:35IvVBP88KDEpamkTqVj70dhLyafGE8U2k1zbIGym5g=
+github.com/ios-xr/telemetry-go-collector v0.0.0-20190725043225-eea20f35c2a1/go.mod h1:cwP6ng85uAfp44Q426v0vHXi5kZx0hAA69iSxTver6o=
 github.com/jpillora/backoff v1.0.0/go.mod h1:J/6gKK9jxlEcS3zixgDgUAsiuZ7yrSoa/FX5e0EB2j4=
 github.com/json-iterator/go v1.1.6/go.mod h1:+SdeFBvtyEkXs7REEP0seUULqWtbJapLOCVDaaPEHmU=
 github.com/json-iterator/go v1.1.10/go.mod h1:KdQUCv79m/52Kvf8AW2vK1V8akMuk1QjK/uOdHXbAo4=

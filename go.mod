@@ -16,6 +16,7 @@ require (
 require github.com/mattn/go-sqlite3 v1.14.15
 
 require (
+	github.com/ios-xr/telemetry-go-collector v0.0.0-20190725043225-eea20f35c2a1 // indirect
 	github.com/nats-io/nats.go v1.18.0 // indirect
 	github.com/nats-io/nkeys v0.3.0 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
