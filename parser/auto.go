@@ -67,13 +67,13 @@ func init() {
 		Help:     "Parse Juniper telemetry in the form of protocol buffers. Typicially combined with the UDP receiver.",
 		AutoMake: true,
 	})
-        Auto.Add(skogul.Module{
-                Name:     "protobuf_iosxr",
-                Aliases:  []string{"iosxr"},
-                Alloc:    func() interface{} { return &IOSXR_Parser{} },
-                Help:     "Parse Cisco IOS-XR telemetry in the form of JSON, GPB or GPBKV. Typicially combined with the UDP receiver.",
-                AutoMake: true,
-        })
+	Auto.Add(skogul.Module{
+		Name:     "protobuf_iosxr",
+		Aliases:  []string{"iosxr"},
+		Alloc:    func() interface{} { return &IOSXR_Parser{} },
+		Help:     "Parse Cisco IOS-XR telemetry in the form of JSON, GPB or GPBKV. Typicially combined with the UDP receiver.",
+		AutoMake: true,
+	})
 	Auto.Add(skogul.Module{
 		Name:     "protobuf_usp",
 		Aliases:  []string{"usp"},

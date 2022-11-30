@@ -1,57 +1,58 @@
 package parser
 
 import (
-	"fmt"
-	"sync"
-	"time"
 	"bytes"
-	"strconv"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"github.com/golang/protobuf/proto"
-	"github.com/telenornms/skogul"
 	"github.com/ios-xr/telemetry-go-collector/telemetry"
+	"github.com/telenornms/skogul"
+	"strconv"
+	"sync"
+	"time"
 )
 
 var xrLog = skogul.Logger("parser", "iosxr")
 
 type encapSTHdrMsgType uint16
+
 const (
-      ENC_ST_HDR_MSG_TYPE_UNSED encapSTHdrMsgType = iota
-      ENC_ST_HDR_MSG_TYPE_TELEMETRY_DATA
-      ENC_ST_HDR_MSG_TYPE_HEARTBEAT
+	ENC_ST_HDR_MSG_TYPE_UNSED encapSTHdrMsgType = iota
+	ENC_ST_HDR_MSG_TYPE_TELEMETRY_DATA
+	ENC_ST_HDR_MSG_TYPE_HEARTBEAT
 )
 
 type encapSTHdrMsgEncap uint16
+
 const (
-      ENC_ST_HDR_MSG_ENCAP_UNSED encapSTHdrMsgEncap = iota
-      ENC_ST_HDR_MSG_ENCAP_GPB
-      ENC_ST_HDR_MSG_ENCAP_JSON
+	ENC_ST_HDR_MSG_ENCAP_UNSED encapSTHdrMsgEncap = iota
+	ENC_ST_HDR_MSG_ENCAP_GPB
+	ENC_ST_HDR_MSG_ENCAP_JSON
 )
 
 type tcpMsgHdr struct {
-     MsgType       encapSTHdrMsgType
-     MsgEncap      encapSTHdrMsgEncap
-     MsgHdrVersion uint16
-     Msgflag       uint16
-     Msglen        uint32
+	MsgType       encapSTHdrMsgType
+	MsgEncap      encapSTHdrMsgEncap
+	MsgHdrVersion uint16
+	Msgflag       uint16
+	Msglen        uint32
 }
 
 type IOSXR_Parser struct {
-	Debug bool `doc:""`
-	once  sync.Once
-	Stats *iosxr_statistics
+	Debug    bool `doc:""`
+	once     sync.Once
+	Stats    *iosxr_statistics
 	Encoding string
-
 }
 
 type iosxr_statistics struct {
-	Received                     uint64 // Received parse calls
+	Received uint64 // Received parse calls
 }
 
 func (x *IOSXR_Parser) initStats() {
 	x.Stats = &iosxr_statistics{
-		Received:                     0,
+		Received: 0,
 	}
 }
 
@@ -61,7 +62,7 @@ func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 	var hdr tcpMsgHdr
 
 	hdrbuf := bytes.NewReader(b[:12])
-	data := b[12:len(b)]
+	data := b[12:]
 	err = binary.Read(hdrbuf, binary.BigEndian, &hdr)
 
 	x.Encoding = getEncodeStr(hdr.MsgEncap)
@@ -121,7 +122,7 @@ func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*sko
 }
 
 func someRecursiveFunction(item []*telemetry.TelemetryField, data map[string]interface{}) map[string]interface{} {
-	
+
 	if item == nil || len(item) == 0 {
 		return nil
 	}
@@ -166,7 +167,7 @@ func extractGPBKVFieldValueByType(field *telemetry.TelemetryField) interface{} {
 
 func (x *IOSXR_Parser) generateMetricsFromJSON(data []byte) ([]*skogul.Metric, error) {
 	var jData = make(map[string]interface{})
-    var err = json.Unmarshal(data, &jData)
+	var err = json.Unmarshal(data, &jData)
 	var skogulMetrics = make([]*skogul.Metric, 0)
 
 	//IOS-XR "metadata" is a common property for multiple metrics.
@@ -205,7 +206,7 @@ func (x *IOSXR_Parser) parseTimeFromString(str string) (*time.Time, error) {
 }
 
 func (x *IOSXR_Parser) generateMetadataFromJSON(data []byte) (map[string]interface{}, error) {
-    var jData = make(map[string]interface{})
+	var jData = make(map[string]interface{})
 	var err = json.Unmarshal(data, &jData)
 	delete(jData, "data_json")
 	return jData, err
@@ -226,12 +227,12 @@ func (x *IOSXR_Parser) generateMetaData(data *telemetry.Telemetry) (map[string]i
 }
 
 func getEncodeStr(enc encapSTHdrMsgEncap) string {
-     switch (enc) {
-     case ENC_ST_HDR_MSG_ENCAP_GPB:
-         return "gpb"
-     case ENC_ST_HDR_MSG_ENCAP_JSON:
-         return "json"
-     default:
-         return "Unknown"
-     }
+	switch enc {
+	case ENC_ST_HDR_MSG_ENCAP_GPB:
+		return "gpb"
+	case ENC_ST_HDR_MSG_ENCAP_JSON:
+		return "json"
+	default:
+		return "Unknown"
+	}
 }
