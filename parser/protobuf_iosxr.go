@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"sync"
 	"time"
 	"bytes"
@@ -65,7 +66,6 @@ func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 
 	x.Encoding = getEncodeStr(hdr.MsgEncap)
 
-	metric := skogul.Metric{}
 	telem := &telemetry.Telemetry{}
 	container := skogul.Container{}
 	if x.Encoding == "json" {
@@ -73,66 +73,115 @@ func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 		err = json.Unmarshal(data, telem)
 		container.Metrics, err = x.generateMetricsFromJSON(data)
 		if err != nil {
-			xrLog.Error("Could not genererate metrics from JSON")
+			return nil, fmt.Errorf("Could not generate metrics from JSON")
 		}
 	} else {
 		xrLog.Debugf("Encoding is GPB")
 		err = proto.Unmarshal(data, telem)
 		if telem.GetDataGpb() != nil {
 			//GPB
+			return nil, fmt.Errorf("GPB Payloads not supported")
 		} else {
 			//KVGPB
+			container.Metrics, err = x.generateDataFromGpbkv(telem)
 		}
 	}
-
-	metric.Metadata, err = x.generateMetaData(telem)
 
 	return &container, err
 }
 
 // Create and return an array of skogul.Metric type objects containing metrics parsed from
-// IOS-XR protobuf encoded MDT Telemetry packets.
-func (x *IOSXR_Parser) generateDataFromGBP(telem *telemetry.Telemetry) ([]*skogul.Metric, error) {
-//        var metadata = make(map[string]interface{})
+// IOS-XR selfdescribing protobuf encoded MDT Telemetry packets.
+func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*skogul.Metric, error) {
+	var err error
 	var skogulMetrics = make([]*skogul.Metric, 0)
 
-	var err error
+	for _, topField := range telem.GetDataGpbkv() {
+		time := time.UnixMilli(int64(telem.GetMsgTimestamp()))
+		metric := skogul.Metric{}
+		metric.Metadata, err = x.generateMetaData(telem)
+		metric.Data = make(map[string]interface{})
+		metric.Time = &time
+
+		//Seems like some endpoints generate empty metrics.
+
+		//Need to do recursive lookup
+		for _, field := range topField.GetFields() {
+			fieldData := make(map[string]interface{})
+			if field.Name == "keys" {
+				metric.Data["keys"] = someRecursiveFunction(field.GetFields(), fieldData)
+			} else if field.Name == "content" {
+				metric.Data["content"] = someRecursiveFunction(field.GetFields(), fieldData)
+			}
+		}
+		skogulMetrics = append(skogulMetrics, &metric)
+	}
+
 	return skogulMetrics, err
 }
 
-// Create and return an array of skogul.Metric type objects containing metrics parsed from
-// IOS-XR selfdescribing protobuf encoded MDT Telemetry packets.
-func (x *IOSXR_Parser) generateDataFromGBPKV(telem *telemetry.Telemetry) ([]*skogul.Metric, error) {
-//        var metadata = make(map[string]interface{})
-        var skogulMetrics = make([]*skogul.Metric, 0)
+func someRecursiveFunction(item []*telemetry.TelemetryField, data map[string]interface{}) map[string]interface{} {
+	
+	if item == nil || len(item) == 0 {
+		return nil
+	}
 
-        var err error
+	for _, field := range item {
+		var fieldVal interface{}
 
-	return skogulMetrics, err
+		children := field.GetFields()
+		if children == nil {
+			fieldVal = extractGPBKVFieldValueByType(field)
+		} else {
+			fieldVal = someRecursiveFunction(children, data)
+		}
+		data[field.Name] = fieldVal
+	}
+	return data
 }
 
+func extractGPBKVFieldValueByType(field *telemetry.TelemetryField) interface{} {
+	switch field.ValueByType.(type) {
+	case *telemetry.TelemetryField_BytesValue:
+		return field.GetBytesValue()
+	case *telemetry.TelemetryField_StringValue:
+		return field.GetStringValue()
+	case *telemetry.TelemetryField_BoolValue:
+		return field.GetBoolValue()
+	case *telemetry.TelemetryField_Uint32Value:
+		return field.GetUint32Value()
+	case *telemetry.TelemetryField_Uint64Value:
+		return field.GetUint64Value()
+	case *telemetry.TelemetryField_Sint32Value:
+		return field.GetSint32Value()
+	case *telemetry.TelemetryField_Sint64Value:
+		return field.GetSint64Value()
+	case *telemetry.TelemetryField_DoubleValue:
+		return field.GetDoubleValue()
+	case *telemetry.TelemetryField_FloatValue:
+		return field.GetFloatValue()
+	}
+	return nil
+}
 
 func (x *IOSXR_Parser) generateMetricsFromJSON(data []byte) ([]*skogul.Metric, error) {
-	var c_data = make(map[string]interface{})
-        var err = json.Unmarshal(data, &c_data)
+	var jData = make(map[string]interface{})
+    var err = json.Unmarshal(data, &jData)
 	var skogulMetrics = make([]*skogul.Metric, 0)
-	xrLog.Debugf(string(data))
+
 	//IOS-XR "metadata" is a common property for multiple metrics.
 	metadata, err := x.generateMetadataFromJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("Could not generate metadata from json: %v", err)
+	}
 
-	if c_data["data_json"] == nil {
-		//empty metrics.
-                metric := skogul.Metric{}
-                metric.Data = make(map[string]interface{})
-                metric.Metadata = metadata
-		metric.Time, err = x.parseTimeFromString(c_data["msg_timestamp"].(string))
-		skogulMetrics = append(skogulMetrics, &metric)
-		return skogulMetrics, err
+	if jData["data_json"] == nil {
+		return nil, fmt.Errorf("Data empty in packet from %v. Path: %v", metadata["nodeId"], metadata["encodingPath"])
 	}
 
 	//Need to massage the data structure a bit.
 	//'data_json' is an array of metric objects.
-	for i, obj := range c_data["data_json"].([]interface{}) {
+	for i, obj := range jData["data_json"].([]interface{}) {
 		metric := skogul.Metric{}
 		metric.Data = make(map[string]interface{})
 		metric.Metadata = metadata
@@ -149,30 +198,29 @@ func (x *IOSXR_Parser) generateMetricsFromJSON(data []byte) ([]*skogul.Metric, e
 	return skogulMetrics, err
 }
 
-func (x *IOSXR_Parser) parseTimeFromString(time_str string) (*time.Time, error) {
-	i, err := strconv.ParseInt(time_str, 10, 64)
+func (x *IOSXR_Parser) parseTimeFromString(str string) (*time.Time, error) {
+	i, err := strconv.ParseInt(str, 10, 64)
 	t := time.UnixMilli(i)
 	return &t, err
 }
 
 func (x *IOSXR_Parser) generateMetadataFromJSON(data []byte) (map[string]interface{}, error) {
-        var c_data = make(map[string]interface{})
-	var err = json.Unmarshal(data, &c_data)
-	delete(c_data, "data_json")
-	return c_data, err
+    var jData = make(map[string]interface{})
+	var err = json.Unmarshal(data, &jData)
+	delete(jData, "data_json")
+	return jData, err
 
 }
 
 func (x *IOSXR_Parser) generateMetaData(data *telemetry.Telemetry) (map[string]interface{}, error) {
 	var metadata = make(map[string]interface{})
 
-	metadata["nodeId"] = data.GetNodeIdStr()
-	metadata["encodingPath"] = data.GetEncodingPath()
-	metadata["modelVersion"] = data.GetModelVersion()
-	metadata["collectionId"] = data.GetCollectionId()
-	metadata["msgTimestamp"] = data.GetMsgTimestamp()
-	metadata["collectionStartTime"] = data.GetCollectionStartTime()
-	metadata["subscriptionIdStr"] = data.GetSubscriptionIdStr()
+	metadata["node_id_str"] = data.GetNodeIdStr()
+	metadata["encoding_path"] = data.GetEncodingPath()
+	metadata["collection_id"] = data.GetCollectionId()
+	metadata["msg_timestamp"] = data.GetMsgTimestamp()
+	metadata["collection_start_time"] = data.GetCollectionStartTime()
+	metadata["subscription_id_str"] = data.GetSubscriptionIdStr()
 
 	return metadata, nil
 }
