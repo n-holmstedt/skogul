@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/golang/protobuf/proto"
-	"github.com/ios-xr/telemetry-go-collector/telemetry"
+	"iosxr/telemetry" //vendor import for now
 	"github.com/telenornms/skogul"
 	"strconv"
 	"sync"
