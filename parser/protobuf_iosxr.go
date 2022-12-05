@@ -10,6 +10,7 @@ import (
 	"github.com/telenornms/skogul"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,15 +40,20 @@ type tcpMsgHdr struct {
 	Msglen        uint32
 }
 
+// IOSXR_Parser
 type IOSXR_Parser struct {
 	Debug    bool `doc:""`
 	once     sync.Once
 	Stats    *iosxr_statistics
-	Encoding string
+	encoding string
 }
 
 type iosxr_statistics struct {
-	Received uint64 // Received parse calls
+	Received               uint64 // Received parse calls
+	Parsed                 uint64 // Successfully parsed packets
+	EmptyPayloadsRecieved  uint64 // MDT packets with empty payload
+	FailedToJsonUnmarshal  uint64 // JSON payloads unpacked unsuccessfully
+	FailedToGpbkvUnmarshal uint64 // Gpbkv payloads unpacked unsuccessfully
 }
 
 func (x *IOSXR_Parser) initStats() {
@@ -58,6 +64,8 @@ func (x *IOSXR_Parser) initStats() {
 
 func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 	x.once.Do(x.initStats)
+	atomic.AddUint64(&x.Stats.Received, 1)
+
 	var err error
 	var hdr tcpMsgHdr
 
@@ -65,34 +73,51 @@ func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 	data := b[12:]
 	err = binary.Read(hdrbuf, binary.BigEndian, &hdr)
 
-	x.Encoding = getEncodeStr(hdr.MsgEncap)
+	x.encoding = getEncodeStr(hdr.MsgEncap)
 
 	telem := &telemetry.Telemetry{}
 	container := skogul.Container{}
-	if x.Encoding == "json" {
+	if x.encoding == "json" {
 		xrLog.Debugf("Encoding is JSON")
+
 		err = json.Unmarshal(data, telem)
 		container.Metrics, err = x.generateMetricsFromJSON(data)
 		if err != nil {
+			if x.Debug {
+				xrLog.Debugf("Failed to unmarshal json. Data:\n%v", data)
+			}
+			atomic.AddUint64(&x.Stats.FailedToJsonUnmarshal, 1)
 			return nil, fmt.Errorf("Could not generate metrics from JSON")
 		}
 	} else {
 		xrLog.Debugf("Encoding is GPB")
+
 		err = proto.Unmarshal(data, telem)
+		xrLog.Debugf("Telem:\n%v", telem)
+		if err != nil {
+			if x.Debug {
+				xrLog.Debugf("Failed to unmarshal protobuf. Data:\n%v", data)
+			}
+			atomic.AddUint64(&x.Stats.FailedToGpbkvUnmarshal, 1)
+			return nil, fmt.Errorf("Could not generate metrics from Gpbkv")
+		}
+
 		if telem.GetDataGpb() != nil {
-			//GPB
-			return nil, fmt.Errorf("GPB Payloads not supported")
-		} else {
-			//KVGPB
+			return nil, fmt.Errorf("Strict GPB Payloads not supported")
+		} else if telem.GetDataGpbkv() != nil {
 			container.Metrics, err = x.generateDataFromGpbkv(telem)
+		} else {
+			atomic.AddUint64(&x.Stats.EmptyPayloadsRecieved, 1)
+			return nil, fmt.Errorf("Empty GPB payload recieved from %v, path: %v", telem.GetNodeIdStr(), telem.GetEncodingPath())
 		}
 	}
 
+	atomic.AddUint64(&x.Stats.Parsed, 1)
 	return &container, err
 }
 
 // Create and return an array of skogul.Metric type objects containing metrics parsed from
-// IOS-XR selfdescribing protobuf encoded MDT Telemetry packets.
+// IOS-XR selfdescribing protobuf-encoded MDT Telemetry packets.
 func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*skogul.Metric, error) {
 	var err error
 	var skogulMetrics = make([]*skogul.Metric, 0)
@@ -100,19 +125,22 @@ func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*sko
 	for _, topField := range telem.GetDataGpbkv() {
 		time := time.UnixMilli(int64(telem.GetMsgTimestamp()))
 		metric := skogul.Metric{}
-		metric.Metadata, err = x.generateMetaData(telem)
+		metric.Metadata = x.generateMetaData(telem)
 		metric.Data = make(map[string]interface{})
 		metric.Time = &time
 
 		//Seems like some endpoints generate empty metrics.
+		if len(topField.GetFields()) == 0 {
+			atomic.AddUint64(&x.Stats.EmptyPayloadsRecieved, 1)
+			return nil, fmt.Errorf("Empty content in Gpbkv payload from %v. Path: %v", metric.Metadata["node_id"], metric.Metadata["encodingPath"])
+		}
 
 		//Need to do recursive lookup
 		for _, field := range topField.GetFields() {
-			fieldData := make(map[string]interface{})
 			if field.Name == "keys" {
-				metric.Data["keys"] = someRecursiveFunction(field.GetFields(), fieldData)
+				metric.Data["keys"] = createMapRecursive(field.GetFields(), make(map[string]interface{}))
 			} else if field.Name == "content" {
-				metric.Data["content"] = someRecursiveFunction(field.GetFields(), fieldData)
+				metric.Data["content"] = createMapRecursive(field.GetFields(), make(map[string]interface{}))
 			}
 		}
 		skogulMetrics = append(skogulMetrics, &metric)
@@ -121,7 +149,7 @@ func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*sko
 	return skogulMetrics, err
 }
 
-func someRecursiveFunction(item []*telemetry.TelemetryField, data map[string]interface{}) map[string]interface{} {
+func createMapRecursive(item []*telemetry.TelemetryField, data map[string]interface{}) map[string]interface{} {
 
 	if item == nil || len(item) == 0 {
 		return nil
@@ -129,12 +157,11 @@ func someRecursiveFunction(item []*telemetry.TelemetryField, data map[string]int
 
 	for _, field := range item {
 		var fieldVal interface{}
-
 		children := field.GetFields()
 		if children == nil {
 			fieldVal = extractGPBKVFieldValueByType(field)
 		} else {
-			fieldVal = someRecursiveFunction(children, data)
+			fieldVal = createMapRecursive(children, make(map[string]interface{}))
 		}
 		data[field.Name] = fieldVal
 	}
@@ -177,12 +204,13 @@ func (x *IOSXR_Parser) generateMetricsFromJSON(data []byte) ([]*skogul.Metric, e
 	}
 
 	if jData["data_json"] == nil {
-		return nil, fmt.Errorf("Data empty in packet from %v. Path: %v", metadata["nodeId"], metadata["encodingPath"])
+		atomic.AddUint64(&x.Stats.EmptyPayloadsRecieved, 1)
+		return nil, fmt.Errorf("Empty content in JSON payload from %v. Path: %v", metadata["node_id"], metadata["encoding_path"])
 	}
 
 	//Need to massage the data structure a bit.
 	//'data_json' is an array of metric objects.
-	for i, obj := range jData["data_json"].([]interface{}) {
+	for _, obj := range jData["data_json"].([]interface{}) {
 		metric := skogul.Metric{}
 		metric.Data = make(map[string]interface{})
 		metric.Metadata = metadata
@@ -192,7 +220,6 @@ func (x *IOSXR_Parser) generateMetricsFromJSON(data []byte) ([]*skogul.Metric, e
 			}
 			metric.Data[k] = v
 		}
-		xrLog.Debugf("Appending metric %v", i)
 		skogulMetrics = append(skogulMetrics, &metric)
 	}
 
@@ -206,15 +233,14 @@ func (x *IOSXR_Parser) parseTimeFromString(str string) (*time.Time, error) {
 }
 
 func (x *IOSXR_Parser) generateMetadataFromJSON(data []byte) (map[string]interface{}, error) {
-	var jData = make(map[string]interface{})
-	var err = json.Unmarshal(data, &jData)
+	jData := make(map[string]interface{})
+	err := json.Unmarshal(data, &jData)
 	delete(jData, "data_json")
 	return jData, err
-
 }
 
-func (x *IOSXR_Parser) generateMetaData(data *telemetry.Telemetry) (map[string]interface{}, error) {
-	var metadata = make(map[string]interface{})
+func (x *IOSXR_Parser) generateMetaData(data *telemetry.Telemetry) map[string]interface{} {
+	metadata := make(map[string]interface{})
 
 	metadata["node_id_str"] = data.GetNodeIdStr()
 	metadata["encoding_path"] = data.GetEncodingPath()
@@ -223,7 +249,7 @@ func (x *IOSXR_Parser) generateMetaData(data *telemetry.Telemetry) (map[string]i
 	metadata["collection_start_time"] = data.GetCollectionStartTime()
 	metadata["subscription_id_str"] = data.GetSubscriptionIdStr()
 
-	return metadata, nil
+	return metadata
 }
 
 func getEncodeStr(enc encapSTHdrMsgEncap) string {
