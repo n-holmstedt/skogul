@@ -43,9 +43,10 @@ type tcpMsgHdr struct {
 // IOSXR_Parser
 type IOSXR_Parser struct {
 	Debug    bool `doc:""`
-	once     sync.Once
+	Depth    int  `doc:""`
 	Stats    *iosxr_statistics
 	encoding string
+	once     sync.Once
 }
 
 type iosxr_statistics struct {
@@ -69,6 +70,10 @@ func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 	var err error
 	var hdr tcpMsgHdr
 
+	if x.Depth == 0 {
+		x.Depth = 5
+	}
+
 	hdrbuf := bytes.NewReader(b[:12])
 	data := b[12:]
 	err = binary.Read(hdrbuf, binary.BigEndian, &hdr)
@@ -84,31 +89,31 @@ func (x *IOSXR_Parser) Parse(b []byte) (*skogul.Container, error) {
 		container.Metrics, err = x.generateMetricsFromJSON(data)
 		if err != nil {
 			if x.Debug {
-				xrLog.Debugf("Failed to unmarshal json. Data:\n%v", data)
+				xrLog.Debugf("Failed to unmarshal json. Data: %v", data)
 			}
 			atomic.AddUint64(&x.Stats.FailedToJsonUnmarshal, 1)
-			return nil, fmt.Errorf("Could not generate metrics from JSON")
+			return nil, fmt.Errorf("Could not unmarshal JSON payload")
 		}
 	} else {
-		xrLog.Debugf("Encoding is GPB")
+		xrLog.Debugf("Encoding is Gpb")
 
 		err = proto.Unmarshal(data, telem)
 		xrLog.Debugf("Telem:\n%v", telem)
 		if err != nil {
 			if x.Debug {
-				xrLog.Debugf("Failed to unmarshal protobuf. Data:\n%v", data)
+				xrLog.Debugf("Failed to unmarshal protobuf. Data: %v", data)
 			}
 			atomic.AddUint64(&x.Stats.FailedToGpbkvUnmarshal, 1)
-			return nil, fmt.Errorf("Could not generate metrics from Gpbkv")
+			return nil, fmt.Errorf("Could not unmarshal protobuf payload")
 		}
 
 		if telem.GetDataGpb() != nil {
-			return nil, fmt.Errorf("Strict GPB Payloads not supported")
+			return nil, fmt.Errorf("Payload from %v:%v was Gpb encoded. Only Gpbkv is currently supported.", telem.GetNodeIdStr(), telem.GetEncodingPath())
 		} else if telem.GetDataGpbkv() != nil {
 			container.Metrics, err = x.generateDataFromGpbkv(telem)
 		} else {
 			atomic.AddUint64(&x.Stats.EmptyPayloadsRecieved, 1)
-			return nil, fmt.Errorf("Empty GPB payload recieved from %v, path: %v", telem.GetNodeIdStr(), telem.GetEncodingPath())
+			return nil, fmt.Errorf("Empty Gpb payload recieved from %v, path: %v", telem.GetNodeIdStr(), telem.GetEncodingPath())
 		}
 	}
 
@@ -138,9 +143,9 @@ func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*sko
 		//Need to do recursive lookup
 		for _, field := range topField.GetFields() {
 			if field.Name == "keys" {
-				metric.Data["keys"] = createMapRecursive(field.GetFields(), make(map[string]interface{}))
+				metric.Data["keys"] = createMapRecursive(field.GetFields(), make(map[string]interface{}), x.Depth)
 			} else if field.Name == "content" {
-				metric.Data["content"] = createMapRecursive(field.GetFields(), make(map[string]interface{}))
+				metric.Data["content"] = createMapRecursive(field.GetFields(), make(map[string]interface{}), x.Depth)
 			}
 		}
 		skogulMetrics = append(skogulMetrics, &metric)
@@ -149,25 +154,33 @@ func (x *IOSXR_Parser) generateDataFromGpbkv(telem *telemetry.Telemetry) ([]*sko
 	return skogulMetrics, err
 }
 
-func createMapRecursive(item []*telemetry.TelemetryField, data map[string]interface{}) map[string]interface{} {
+// The Telemetry Field object contains self references, which means we need a recursive function to map it.
+func createMapRecursive(item []*telemetry.TelemetryField, data map[string]interface{}, level int) map[string]interface{} {
 
 	if item == nil || len(item) == 0 {
 		return nil
 	}
 
+	if level <= 0 {
+		xrLog.Warn("Hit max recursive depth.")
+		return nil
+	}
+	//Unsofisticated way to deal with stack overflows. 
+	level -= 1
 	for _, field := range item {
 		var fieldVal interface{}
 		children := field.GetFields()
 		if children == nil {
 			fieldVal = extractGPBKVFieldValueByType(field)
 		} else {
-			fieldVal = createMapRecursive(children, make(map[string]interface{}))
+			fieldVal = createMapRecursive(children, make(map[string]interface{}), level)
 		}
 		data[field.Name] = fieldVal
 	}
 	return data
 }
 
+// Return values depending on type.
 func extractGPBKVFieldValueByType(field *telemetry.TelemetryField) interface{} {
 	switch field.ValueByType.(type) {
 	case *telemetry.TelemetryField_BytesValue:
