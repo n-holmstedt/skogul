@@ -21,6 +21,7 @@ require (
 	github.com/ios-xr/telemetry-go-collector v0.0.0-20190725043225-eea20f35c2a1 // indirect
 	golang.org/x/crypto v0.0.0-20210314154223-e6e6c4f2bb5b // indirect
 )
+require github.com/dolmen-go/jsonptr v0.0.0-20220904212016-e3f38a361346
 
 require (
 	github.com/golang/protobuf v1.5.2 // indirect
