@@ -39,15 +39,24 @@ type SourceDestination struct {
 	Delete      bool   `doc:"Set to true to delete the original. Default is to leave the original."`
 }
 
+// AppendSourceDestination derrived from SourceDestination. This is used
+// to append a source field to a destination with the option of a
+// delimiter separating the string.
+type AppendSourceDestination struct {
+	SourceDestination
+	Delimiter string `doc:"Use this string as a delimiter between the destination and source field."`
+}
+
 // Metadata enforces a set of rules on metadata in all metrics, potentially
 // changing the metric metadata.
 type Metadata struct {
-	Set             map[string]interface{} `doc:"Set metadata fields to specific values."`
-	Require         []string               `doc:"Require the pressence of these fields."`
-	ExtractFromData []string               `doc:"Extract a set of fields from Data and add it to Metadata. Removes the original. Obsolete, will be removed. Use CopyFromData instead."`
-	CopyFromData    []SourceDestination    `doc:"Copy and potentially rename keys from the data section to the metadata section." example:"[{\"source\": \"datakey\", \"destination\": \"destkey\"},{\"source\":\"otherkey\"}]" `
-	Remove          []string               `doc:"Remove these metadata fields."`
-	Ban             []string               `doc:"Fail if any of these fields are present"`
+	Set             map[string]interface{}    `doc:"Set metadata fields to specific values."`
+	Require         []string                  `doc:"Require the pressence of these fields."`
+	ExtractFromData []string                  `doc:"Extract a set of fields from Data and add it to Metadata. Removes the original. Obsolete, will be removed. Use CopyFromData instead."`
+	CopyFromData    []SourceDestination       `doc:"Copy and potentially rename keys from the data section to the metadata section." example:"[{\"source\": \"datakey\", \"destination\": \"destkey\"},{\"source\":\"otherkey\"}]" `
+	Remove          []string                  `doc:"Remove these metadata fields."`
+	Ban             []string                  `doc:"Fail if any of these fields are present"`
+	Append          []AppendSourceDestination `doc:"Append source field as a string, to destination field as a string." example:"[{\"source\": \"datakey\", \"destination\": \"destkey\"}]"`
 }
 
 // Transform enforces the Metadata rules
@@ -103,6 +112,24 @@ func (meta *Metadata) Transform(c *skogul.Container) error {
 			}
 			if c.Metrics[mi].Metadata[value] != nil {
 				return fmt.Errorf("banned metadata field `%s' present", value)
+			}
+		}
+		for _, append := range meta.Append {
+			if c.Metrics[mi].Metadata == nil {
+				continue
+			}
+			if _, ok := c.Metrics[mi].Metadata[append.Source]; !ok {
+				continue
+			}
+			if _, ok := c.Metrics[mi].Metadata[append.Destination]; !ok {
+				continue
+			}
+			if append.Delimiter != "" {
+				c.Metrics[mi].Metadata[append.Destination] = c.Metrics[mi].Metadata[append.Destination].(string) + append.Delimiter
+			}
+			c.Metrics[mi].Metadata[append.Destination] = c.Metrics[mi].Metadata[append.Destination].(string) + c.Metrics[mi].Metadata[append.Source].(string)
+			if append.Delete {
+				delete(c.Metrics[mi].Metadata, append.Source)
 			}
 		}
 	}
