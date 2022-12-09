@@ -104,4 +104,9 @@ func init() {
 		Alloc: func() interface{} { return &Kafka{} },
 		Help:  "Connect to a Kafka topic and consume messages.",
 	})
+	Auto.Add(skogul.Module{
+		Name:  "jetstream-push",
+		Alloc: func() interface{} { return &JetstreamPush{} },
+		Help:  "Connect to a Nats Jeststream and get messages pushed from it.",
+	})
 }
