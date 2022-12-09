@@ -115,45 +115,14 @@ func (js *JetstreamPush) Start() error {
 	var err error
 	js.conOpts = &[]nats.Option{nats.Name(js.Name)}
 
-	if js.UserCreds != "" {
-		*js.conOpts = append(*js.conOpts, nats.UserCredentials(js.UserCreds))
-	}
-
-	// Plain text passwords
-	if js.Username != "" && js.Password != "" {
-		if js.TLSClientKey != "" {
-			jsLog.Warnf("Using plain text password over a non encrypted transport!")
-		}
-		*js.conOpts = append(*js.conOpts, nats.UserInfo(js.Username, js.Password))
+	// Credentials
+	if err := js.setCredentials(); err != nil {
+		return err
 	}
 
 	// TLS Options
-	if js.TLSClientKey != "" && js.TLSClientCert != "" {
-		cert, err := tls.LoadX509KeyPair(js.TLSClientCert, js.TLSClientKey)
-		if err != nil {
-			return fmt.Errorf("error parsing X509 certificate/key pair: %v", err)
-		}
-
-		cp, err := skogul.GetCertPool(js.TLSCACert)
-		if err != nil {
-			return fmt.Errorf("Failed to initialize root CA pool")
-		}
-
-		config := &tls.Config{
-			InsecureSkipVerify: js.Insecure,
-			Certificates:       []tls.Certificate{cert},
-			RootCAs:            cp,
-		}
-		*js.conOpts = append(*js.conOpts, nats.Secure(config))
-	}
-
-	// NKey auth
-	if js.NKeyFile != "" {
-		opt, err := nats.NkeyOptionFromSeed(js.NKeyFile)
-		if err != nil {
-			jsLog.Fatal(err)
-		}
-		*js.conOpts = append(*js.conOpts, opt)
+	if err := js.setTLS(); err != nil {
+		return err
 	}
 
 	// Log disconnects
@@ -175,31 +144,15 @@ func (js *JetstreamPush) Start() error {
 		jsLog.Errorf("Encountered an error while connecting to Nats: %v", err)
 	}
 
+	// Activate Jetstream functionality for the connections
 	js.stream, err = js.natsCon.JetStream()
 	if err != nil {
 		return fmt.Errorf("Could not enable Jetstream for this connection: %v", err)
 	}
 
-	js.cInfo, err = js.stream.ConsumerInfo(js.StreamName, js.ConsumerName)
-	if err != nil {
-		jsLog.Debugf("Consumer does not exist, Creating consumer!")
-		// Jetstream consumer does not exist, create options.
-		if err := js.setConsumerType(); err != nil {
-			return err
-		}
-		// Jetstream Acknowledgement Policy.
-		if err := js.setAckPolicy(); err != nil {
-			return err
-		}
-		// Jetstream Deliver Policy.
-		if err := js.setDeliverPolicy(); err != nil {
-			return err
-		}
-		// Create Jetstream consumer.
-		js.cInfo, err = js.stream.AddConsumer(js.StreamName, &js.jsConsumeOpts)
-		if err != nil {
-			return fmt.Errorf("Could not create consumer: %v", err)
-		}
+	// Fetch Jetstream consumer if existing, or create a new.
+	if err := js.setConsumer(); err != nil {
+		return err
 	}
 
 	// Message delivered callback.
@@ -214,7 +167,7 @@ func (js *JetstreamPush) Start() error {
 		return
 	}
 
-	jsLog.Infof("Starting subscription for stream: %v", js.StreamName)
+	jsLog.Infof("Receiving stream: %v, with consumer: %v", js.cInfo.Stream, js.cInfo.Name)
 	js.wg.Add(1)
 	if js.DeliverGroup != "" {
 		// If a DeliverGroup was provided the Jetstream server will loadbalance
@@ -245,6 +198,74 @@ func (js *JetstreamPush) Start() error {
 	}
 	js.wg.Wait()
 	return err
+}
+
+func (js *JetstreamPush) setConsumer() (err error) {
+	js.cInfo, err = js.stream.ConsumerInfo(js.StreamName, js.ConsumerName)
+	if err != nil {
+		jsLog.Debugf("Consumer does not exist, Creating consumer!")
+		// Jetstream consumer does not exist, create options.
+		if err := js.setConsumerType(); err != nil {
+			return err
+		}
+		// Jetstream Acknowledgement Policy.
+		if err := js.setAckPolicy(); err != nil {
+			return err
+		}
+		// Jetstream Deliver Policy.
+		if err := js.setDeliverPolicy(); err != nil {
+			return err
+		}
+		// Create Jetstream consumer.
+		js.cInfo, err = js.stream.AddConsumer(js.StreamName, &js.jsConsumeOpts)
+		if err != nil {
+			return fmt.Errorf("Could not create consumer: %v", err)
+		}
+	}
+	return nil
+}
+
+func (js *JetstreamPush) setCredentials() (err error) {
+	if js.UserCreds != "" {
+		*js.conOpts = append(*js.conOpts, nats.UserCredentials(js.UserCreds))
+	}
+	if js.Username != "" && js.Password != "" {
+		if js.TLSClientKey != "" {
+			jsLog.Warnf("Using plain text password over a non encrypted transport!")
+		}
+		*js.conOpts = append(*js.conOpts, nats.UserInfo(js.Username, js.Password))
+	}
+	if js.NKeyFile != "" {
+		opt, err := nats.NkeyOptionFromSeed(js.NKeyFile)
+		if err != nil {
+			jsLog.Fatal(err)
+		}
+		*js.conOpts = append(*js.conOpts, opt)
+	}
+	return nil
+}
+
+	
+func (js *JetstreamPush) setTLS() (err error) {
+	if js.TLSClientKey != "" && js.TLSClientCert != "" {
+		cert, err := tls.LoadX509KeyPair(js.TLSClientCert, js.TLSClientKey)
+		if err != nil {
+			return fmt.Errorf("error parsing X509 certificate/key pair: %v", err)
+		}
+
+		cp, err := skogul.GetCertPool(js.TLSCACert)
+		if err != nil {
+			return fmt.Errorf("Failed to initialize root CA pool")
+		}
+
+		config := &tls.Config{
+			InsecureSkipVerify: js.Insecure,
+			Certificates:       []tls.Certificate{cert},
+			RootCAs:            cp,
+		}
+		*js.conOpts = append(*js.conOpts, nats.Secure(config))
+	}
+	return nil
 }
 
 func (js *JetstreamPush) setConsumerType() (err error) {
