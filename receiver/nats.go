@@ -52,6 +52,7 @@ type Nats struct {
 	Insecure      bool              `doc:"TLS InsecureSkipVerify"`
 	conOpts       *[]nats.Option
 	natsCon       *nats.Conn
+	natsSub		  *nats.Subscription
 	wg            sync.WaitGroup
 }
 
@@ -149,10 +150,15 @@ func (n *Nats) Start() error {
 	}
 
 	n.wg.Add(1)
-	if n.Queue == "" {
-		n.natsCon.QueueSubscribe(n.Subject, n.Queue, cb)
+	if len(n.Queue) > 0 {
+		n.natsSub, err = n.natsCon.QueueSubscribe(n.Subject, n.Queue, cb)
 	} else {
-		n.natsCon.Subscribe(n.Subject, cb)
+		n.natsSub, err = n.natsCon.Subscribe(n.Subject, cb)
+	}
+
+	if err != nil {
+		n.wg.Done()
+		return err
 	}
 	n.wg.Wait()
 	return n.natsCon.LastError()
